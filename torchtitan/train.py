@@ -109,6 +109,8 @@ def main(job_config: JobConfig):
     # Build the collection of model converters. No-op if `model.converters` empty
     model_converters = build_model_converters(job_config, parallel_dims)
     model_converters.convert(model)
+    if job_config.model.print_after_conversion:
+        logger.info(f"Model definion after conversion:\n\n{model}\n\n")
 
     # log model size
     model_param_count = utils.get_num_params(model)
