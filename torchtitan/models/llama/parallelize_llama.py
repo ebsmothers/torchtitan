@@ -33,14 +33,26 @@ from torch.distributed.tensor.parallel import (
 
 from torchtitan.config_manager import JobConfig, TORCH_DTYPE_MAP
 from torchtitan.distributed import ParallelDims
+from torchtitan.modules.transformer import TransformerDecoder
 from torchtitan.tools.logging import logger
 
 
-def parallelize_llama(
-    model: nn.Module,
+def parallelize_model(
+    model: TransformerDecoder,
     world_mesh: DeviceMesh,
     parallel_dims: ParallelDims,
-    job_config: JobConfig,
+    # job_config: JobConfig,
+    # hacky way to pass raw args from tune
+    compile: bool = False,
+    ac_mode: str = "none",
+    sac_option: str = "2",
+    enable_float8_linear: bool = False,
+    enable_async_tensor_parallel: bool = False,
+    mixed_precision_param: str = "bfloat16",
+    mixed_precision_reduce: str = "float32",
+    enable_cpu_offload: bool = False,
+    fsdp_reshard_after_forward: str = "default",
+    enable_compiled_autograd: bool = False,
 ):
     """
     Apply tensor parallelism, activation checkpointing, torch.compile, and data
@@ -51,25 +63,22 @@ def parallelize_llama(
     """
 
     if parallel_dims.tp_enabled:
-        if (
-            job_config.experimental.enable_async_tensor_parallel
-            and not job_config.training.compile
-        ):
+        if enable_async_tensor_parallel and not compile:
             raise RuntimeError("Async TP requires --training.compile")
-        enable_float8_linear = "float8" in job_config.model.converters
+        # enable_float8_linear = "float8" in job_config.model.converters
         apply_tp(
             model,
             world_mesh["tp"],
             loss_parallel=parallel_dims.loss_parallel_enabled,
             enable_float8=enable_float8_linear,
-            enable_async_tp=job_config.experimental.enable_async_tensor_parallel,
+            enable_async_tp=enable_async_tensor_parallel,
         )
 
-    if job_config.activation_checkpoint.mode != "none":
-        apply_ac(model, job_config.activation_checkpoint)
+    if ac_mode != "none":
+        apply_ac(model, ac_mode, sac_option)
 
     # turn on per-TransformerBlock compile after AC wrapping and before FSDP
-    if job_config.training.compile:
+    if compile:
         apply_compile(model)
 
     if (
@@ -83,11 +92,11 @@ def parallelize_llama(
         apply_fsdp(
             model,
             world_mesh[tuple(dp_mesh_dim_names)],
-            param_dtype=TORCH_DTYPE_MAP[job_config.training.mixed_precision_param],
-            reduce_dtype=TORCH_DTYPE_MAP[job_config.training.mixed_precision_reduce],
+            param_dtype=TORCH_DTYPE_MAP[mixed_precision_param],
+            reduce_dtype=TORCH_DTYPE_MAP[mixed_precision_reduce],
             pp_enabled=parallel_dims.pp_enabled,
-            cpu_offload=job_config.training.enable_cpu_offload,
-            reshard_after_forward_policy=job_config.training.fsdp_reshard_after_forward,
+            cpu_offload=enable_cpu_offload,
+            reshard_after_forward_policy=fsdp_reshard_after_forward,
         )
 
         if parallel_dims.dp_replicate_enabled:
@@ -98,7 +107,7 @@ def parallelize_llama(
         if parallel_dims.cp_enabled:
             logger.info("Applied Context Parallel to the model")
 
-        if job_config.training.enable_cpu_offload:
+        if enable_cpu_offload:
             logger.info("Applied CPU Offloading to the model")
     elif parallel_dims.dp_replicate_enabled:
         if world_mesh.ndim > 1:
@@ -106,8 +115,8 @@ def parallelize_llama(
         apply_ddp(
             model,
             world_mesh,
-            enable_compile=job_config.training.compile,
-            enable_compiled_autograd=job_config.experimental.enable_compiled_autograd,
+            enable_compile=compile,
+            enable_compiled_autograd=enable_compiled_autograd,
         )
 
 
@@ -168,25 +177,25 @@ def apply_tp(
     # NOTE: At the cost of model code change, we can accelerate Sequence Parallel
     #       by folding (and unfolding) the batch dimension and the sequence dimension.
     #       Examples can be found at https://github.com/pytorch/torchtitan/pull/437
-    for layer_id, transformer_block in model.layers.items():
+    for layer_id, transformer_block in enumerate(model.layers):
         layer_plan = {
-            "attention_norm": SequenceParallel(),
-            "attention": prepare_module_input(
+            "sa_norm": SequenceParallel(),
+            "attn": prepare_module_input(
                 input_layouts=(Shard(1), None),
                 desired_input_layouts=(Replicate(), None),
             ),
-            "attention.wq": colwise_parallel(),
-            "attention.wk": colwise_parallel(),
-            "attention.wv": colwise_parallel(),
-            "attention.wo": rowwise_parallel(output_layouts=Shard(1)),
-            "ffn_norm": SequenceParallel(),
-            "feed_forward": prepare_module_input(
+            "attn.q_proj": colwise_parallel(),
+            "attn.k_proj": colwise_parallel(),
+            "attn.v_proj": colwise_parallel(),
+            "attn.output_proj": rowwise_parallel(output_layouts=Shard(1)),
+            "mlp_norm": SequenceParallel(),
+            "mlp": prepare_module_input(
                 input_layouts=(Shard(1),),
                 desired_input_layouts=(Replicate(),),
             ),
-            "feed_forward.w1": colwise_parallel(),
-            "feed_forward.w2": rowwise_parallel(output_layouts=Shard(1)),
-            "feed_forward.w3": colwise_parallel(),
+            "mlp.w1": colwise_parallel(),
+            "mlp.w2": rowwise_parallel(output_layouts=Shard(1)),
+            "mlp.w3": colwise_parallel(),
         }
 
         parallelize_module(
@@ -220,22 +229,20 @@ _save_list = {
 }
 
 
-def _apply_ac_to_transformer_block(module: nn.Module, ac_config):
+def _apply_ac_to_transformer_block(module: nn.Module, ac_mode, sac_option):
     valid_ac_modes = ("full", "selective")
-    if ac_config.mode not in valid_ac_modes:
-        raise ValueError(
-            f"Invalid AC mode: {ac_config.mode}. Valid modes: {valid_ac_modes}"
-        )
+    if ac_mode not in valid_ac_modes:
+        raise ValueError(f"Invalid AC mode: {ac_mode}. Valid modes: {valid_ac_modes}")
 
-    if ac_config.mode == "full":
+    if ac_mode == "full":
         return ptd_checkpoint_wrapper(module, preserve_rng_state=False)
 
-    assert ac_config.mode == "selective", f"{ac_config.mode}"
-    use_op_sac = ac_config.selective_ac_option == "op"
-    use_layer_sac = ac_config.selective_ac_option.isdigit()
+    assert ac_mode == "selective", f"{ac_mode}"
+    use_op_sac = sac_option == "op"
+    use_layer_sac = sac_option.isdigit()
     if not use_op_sac and not use_layer_sac:
         raise ValueError(
-            f"Invalid selective AC option: {ac_config.selective_ac_option}. "
+            f"Invalid selective AC option: {sac_option}. "
             f"Valid options: 'op' or a positive int representing layer frequency"
         )
     if use_op_sac:
@@ -273,7 +280,7 @@ def _apply_ac_to_transformer_block(module: nn.Module, ac_config):
         )
     elif use_layer_sac:
         # Checkpoint every `ac_freq` of the modules passed to this function
-        ac_freq = int(ac_config.selective_ac_option)
+        ac_freq = int(sac_option)
         ptd_checkpoint_wrapper.__dict__.setdefault("_count", 0)
         ptd_checkpoint_wrapper._count += 1
         if not ac_freq or ptd_checkpoint_wrapper._count % ac_freq == 0:
@@ -282,13 +289,15 @@ def _apply_ac_to_transformer_block(module: nn.Module, ac_config):
             return module
 
 
-def apply_ac(model: nn.Module, ac_config):
+def apply_ac(model: TransformerDecoder, ac_mode, sac_option):
     """Apply activation checkpointing to the model."""
     for layer_id, transformer_block in model.layers.named_children():
-        transformer_block = _apply_ac_to_transformer_block(transformer_block, ac_config)
+        transformer_block = _apply_ac_to_transformer_block(
+            transformer_block, ac_mode, sac_option
+        )
         model.layers.register_module(layer_id, transformer_block)
 
-    logger.info(f"Applied {ac_config.mode} activation checkpointing to the model")
+    logger.info(f"Applied {ac_mode} activation checkpointing to the model")
 
 
 def apply_compile(model: nn.Module):
@@ -304,7 +313,7 @@ def apply_compile(model: nn.Module):
 
 
 def apply_fsdp(
-    model: nn.Module,
+    model: TransformerDecoder,
     dp_mesh: DeviceMesh,
     param_dtype: torch.dtype,
     reduce_dtype: torch.dtype,
@@ -334,7 +343,7 @@ def apply_fsdp(
     if cpu_offload:
         fsdp_config["offload_policy"] = CPUOffloadPolicy()
 
-    for layer_id, transformer_block in model.layers.items():
+    for layer_id, transformer_block in enumerate(model.layers):
         if reshard_after_forward_policy == "always":
             reshard_after_forward = True
         elif reshard_after_forward_policy == "never":
@@ -361,7 +370,7 @@ def apply_fsdp(
 
 
 def apply_ddp(
-    model: nn.Module,
+    model: TransformerDecoder,
     dp_mesh: DeviceMesh,
     enable_compile: bool,
     enable_compiled_autograd: bool,
