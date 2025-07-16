@@ -9,7 +9,7 @@
 from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Optional, Protocol, TypeAlias
 
 import torch
 import torch.nn as nn
@@ -78,7 +78,7 @@ DataLoaderBuilder: TypeAlias = Callable[..., BaseDataLoader]
 TokenizerBuilder: TypeAlias = Callable[..., BaseTokenizer]
 MetricsProcessorBuilder: TypeAlias = Callable[..., MetricsProcessor]
 OptimizersBuilder: TypeAlias = Callable[
-    [list[nn.Module], JobConfig, ParallelDims, FTManager],
+    [list[nn.Module], JobConfig, ParallelDims, Optional[FTManager]],
     OptimizersContainer,
 ]
 LRSchedulersBuilder: TypeAlias = Callable[

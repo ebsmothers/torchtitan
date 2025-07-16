@@ -222,7 +222,8 @@ class CheckpointManager:
                     self.states[k].load_state_dict(v)
 
             self.ft_manager.set_state_dict_fns(load_state_dict, state_dict)
-        self.ft_replica_id = job_config.fault_tolerance.replica_id
+        if hasattr(job_config, "fault_tolerance"):
+            self.ft_replica_id = job_config.fault_tolerance.replica_id
 
         async_mode = ckpt_config.async_mode.lower()
         self.enable_staging = (

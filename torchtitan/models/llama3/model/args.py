@@ -40,9 +40,9 @@ class TransformerModelArgs(BaseModelArgs):
     def update_from_config(
         self, job_config: JobConfig, tokenizer: BaseTokenizer
     ) -> None:
-        self.vocab_size = tokenizer.get_vocab_size()
+        self.vocab_size = 128256
         self.max_seq_len = job_config.training.seq_len
-        self.eos_id = tokenizer.eos_id
+        self.eos_id = 128001
 
         if job_config.activation_checkpoint.mode == "selective" and self.use_flex_attn:
             raise ValueError(

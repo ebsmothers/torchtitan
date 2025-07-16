@@ -67,7 +67,7 @@ def _transform_train_spec(original_spec: TrainSpec):
         pipelining_fn=original_spec.pipelining_fn,
         build_optimizers_fn=original_spec.build_optimizers_fn,
         build_lr_schedulers_fn=original_spec.build_lr_schedulers_fn,
-        build_tokenizer_fn=original_spec.build_tokenizer_fn,
+        build_tokenizer_fn=None,
         build_loss_fn=original_spec.build_loss_fn,
     )
 
