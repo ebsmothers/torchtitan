@@ -18,6 +18,7 @@ from torchtitan.protocols.train_spec import (
     OptimizersBuilder,
     ParallelizeFunction,
     PipeliningFunction,
+    StateDictAdapter,
     TokenizerBuilder,
     TrainSpec,
 )
@@ -34,6 +35,7 @@ class ForgeTrainSpec:
     build_lr_schedulers_fn: LRSchedulersBuilder
     build_tokenizer_fn: TokenizerBuilder | None
     build_loss_fn: LossFunctionBuilder
+    state_dict_adapter: type[StateDictAdapter] | None = None
 
 
 # Copy and transform train specs from torchtitan.protocols.train_spec._train_specs
@@ -69,6 +71,7 @@ def _transform_train_spec(original_spec: TrainSpec):
         build_lr_schedulers_fn=original_spec.build_lr_schedulers_fn,
         build_tokenizer_fn=None,
         build_loss_fn=original_spec.build_loss_fn,
+        state_dict_adapter=original_spec.state_dict_adapter,
     )
 
 

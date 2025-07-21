@@ -252,7 +252,7 @@ class CheckpointManager:
         self.cpu_offload_state_dict = None
         self.stager = None
 
-        self.folder = os.path.join(job_config.job.dump_folder, ckpt_config.folder)
+        self.folder = "/tmp/Meta-Llama-3.1-8B-Instruct/"
 
         # Checkpoint policy related fields.
         self.initial_load_path = ckpt_config.initial_load_path
