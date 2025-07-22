@@ -9,7 +9,7 @@ import os
 import sys
 
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, make_dataclass
-from typing import Any, Type
+from typing import Any, Literal, Type
 
 import torch
 import tyro
@@ -136,7 +136,7 @@ class Optimizer:
     weight_decay: float = 0.1
     """Weight decay to use"""
 
-    implementation: str = "fused"
+    implementation: Literal["for-loop", "foreach", "fused"] = "fused"
     """
     Specify which optimizer implementation to use:
     - 'fused': Use fused implementation (CUDA only) for best performance.
@@ -169,7 +169,7 @@ class LRScheduler:
     This is known as the Warmup-Stable-Decay (WSD) schedule, as described in https://arxiv.org/abs/2404.06395.
     """
 
-    decay_type: str = "linear"
+    decay_type: Literal["linear", "sqrt", "cosine"] = "linear"
     """
     Learning rate decay type to use during training:
     - 'linear': linearly decays learning rate from initial to final value
@@ -218,7 +218,7 @@ class Training:
     Whether to apply CPU offloading of parameters, gradients, and optimizer states in FSDP
     """
 
-    mixed_precision_param: str = "bfloat16"
+    mixed_precision_param: Literal["bfloat16", "float32"] = "bfloat16"
     """
     torch dtype to use for parameters when applying mixed precision via fully_shard or torch.autocast.
     This feature takes effect via fully_shard when data_parallel_shard_degree > 1 or
@@ -226,7 +226,7 @@ class Training:
     and no other parallelism is enabled, i.e. under DDP or single-device training.
     """
 
-    mixed_precision_reduce: str = "float32"
+    mixed_precision_reduce: Literal["float32"] = "float32"
     """
     torch dtype to use for reductions when applying mixed precision via FSDP.
     This feature only takes effect when data_parallel_shard_degree > 1
@@ -281,7 +281,7 @@ class Parallelism:
     only `data_parallel_shard_degree` can be negative. 1 means disabled.
     """
 
-    fsdp_reshard_after_forward: str = "default"
+    fsdp_reshard_after_forward: Literal["default", "always", "never"] = "default"
     """
     `reshard_after_forward` specifies the policy for applying `reshard_after_forward`
     within an FSDP setup. `reshard_after_forward` controls parameter behavior after forward,
@@ -355,7 +355,7 @@ class Parallelism:
     context_parallel_degree: int = 1
     """Context parallelism degree. 1 means disabled."""
 
-    context_parallel_rotate_method: str = "allgather"
+    context_parallel_rotate_method: Literal["allgather", "alltoall"] = "allgather"
     """
     The collective to use in context parallel SDPA for kv shards exchange.
     - 'allgather' means to all-gather all kv shards on ranks after the first sub-SDPA computation,
@@ -421,7 +421,7 @@ class Checkpoint:
     The default value is True.
     """
 
-    export_dtype: str = "float32"
+    export_dtype: Literal["float16", "bfloat16", "float32"] = "float32"
     """
     Converts to the specified precision when training completes and last_save_model_only=true.
     """
@@ -433,7 +433,7 @@ class Checkpoint:
     Could be implemented as a separate script, but this way shares more code.
     """
 
-    async_mode: str = "disabled"
+    async_mode: Literal["disabled", "async", "async_with_pinned_mem"] = "disabled"
     """
     Which async checkpoint mode to use. Currently there are 3 different modes.
     - "disabled": synchronized checkpointing will be used.
@@ -489,7 +489,7 @@ class Checkpoint:
 
 @dataclass
 class ActivationCheckpoint:
-    mode: str = "selective"
+    mode: Literal["selective", "full", "none"] = "selective"
     """Type of activation checkpointing to use"""
 
     selective_ac_option: str = "2"
@@ -529,7 +529,7 @@ class Float8:
     for backward computation.
     """
 
-    recipe_name: str | None = None
+    recipe_name: Literal["tensorwise", "rowwise", "rowwise_with_gw_hp"] | None = None
     """If specified, creates float8 config from recipe name"""
 
     filter_fqns: list[str] = field(default_factory=list)
@@ -559,7 +559,7 @@ class MX:
     use_fp8_dim1_cast_triton_kernel: bool = True
     """Temp work around for inductor performance gap"""
 
-    recipe_name: str = "mxfp8"
+    recipe_name: Literal["mxfp8"] = "mxfp8"
     """If specified, creates float8 config from recipe name"""
 
     filter_fqns: list[str] = field(default_factory=lambda: ["output"])

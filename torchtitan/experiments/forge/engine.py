@@ -219,7 +219,9 @@ class ForgeEngine(torch.distributed.checkpoint.stateful.Stateful):
             optimizers=self.optimizers,
             lr_schedulers=self.lr_schedulers,
             states={"train_state": self},
-            job_config=job_config,
+            checkpoint_config=job_config.checkpoint,
+            sd_adapter=self.train_spec.state_dict_adapter,
+            checkpoint_path=self.job_config.checkpoint.folder,
         )
 
         loss_parallel_enabled = (
