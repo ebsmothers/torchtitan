@@ -126,6 +126,8 @@ class HuggingFaceDataset(IterableDataset, Stateful):
                 sample_tokens = self._tokenizer.encode(
                     sample_text, add_bos=True, add_eos=True
                 )
+                # TODO: hack for smaller vocab size
+                sample_tokens = [min(x, 101999) for x in sample_tokens]
                 self._token_buffer.extend(sample_tokens)
                 self._sample_idx += 1
 

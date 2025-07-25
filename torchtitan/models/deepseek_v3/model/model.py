@@ -380,7 +380,6 @@ class DeepSeekV3Model(nn.Module, ModelProtocol):
             init_attention_mask(
                 input_batch if input_batch is not None else tokens, eos_id=eos_id
             )
-
         h = self.tok_embeddings(tokens) if self.tok_embeddings is not None else tokens
 
         for layer in self.layers.values():
