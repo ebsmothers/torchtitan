@@ -195,8 +195,10 @@ def apply_tp(
         layer_plan = {
             "attention_norm": SequenceParallel(),
             "attention": prepare_module_input(
-                input_layouts=(Shard(1), None),
-                desired_input_layouts=(Replicate(), None),
+                # Note: this is just needed to support cross-attention
+                # Shouldn't be hard to do without this change
+                input_layouts=(Shard(1), Shard(1)),
+                desired_input_layouts=(Replicate(), Replicate()),
             ),
             "attention.wq": colwise_parallel(),
             "attention.wk": colwise_parallel(),
