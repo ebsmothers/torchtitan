@@ -184,9 +184,9 @@ class MultiHeadAttention(nn.Module):
         xv = xv.view(bs, seqlen, -1, self.head_dim)
 
         # Apply rotary embeddings if provided
-        if freqs_cis is not None and self.pos_embeddings is not None:
-            xq = self.pos_embeddings(xq, freqs_cis=freqs_cis)
-            xk = self.pos_embeddings(xk, freqs_cis=freqs_cis)
+        if self.pos_embeddings is not None:
+            xq = self.pos_embeddings(xq)
+            xk = self.pos_embeddings(xk)
         elif freqs_cis is not None:
             # Apply rotary embeddings directly (for compatibility with existing torchtitan code)
             from torchtitan.models.llama3.model.model import apply_rotary_emb

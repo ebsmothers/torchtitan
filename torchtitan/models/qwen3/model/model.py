@@ -4,49 +4,47 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-Modular Llama model implementation using torchtune-style modular components.
-
-This demonstrates how to recreate torchtune's modular model definitions in torchtitan
-while maintaining compatibility with existing parallelization functions.
-"""
-
-from typing import List, Optional, Union
+from typing import Union
 
 import torch
-from torch import nn
+import torch.nn as nn
+from torchtitan.models.qwen3.model.qwen3_attention import Qwen3Attention
+from torchtitan.modules.attention import MultiHeadAttention
+from torchtitan.modules.feed_forward import FeedForward
+from torchtitan.modules.qwen2_rope import Qwen2RotaryPositionalEmbeddings
 
-from torchtitan.models.attention import build_attention, init_attention_mask
-from torchtitan.models.llama3.model.model import precompute_freqs_cis
-from torchtitan.modules import (
-    FeedForward,
-    MultiHeadAttention,
+from torchtitan.modules.transformer import (
     TransformerDecoder,
     TransformerSelfAttentionLayer,
 )
-from torchtitan.protocols.train_spec import ModelProtocol
 
-from .args import TransformerModelArgs
+# Type alias for attention masks
+try:
+    from torch.nn.attention.flex_attention import BlockMask
+
+    _MaskType = Union[torch.Tensor, BlockMask]
+except ImportError:
+    # BlockMask not available, use torch.Tensor only
+    _MaskType = torch.Tensor
+
+from .args import Qwen3ModelArgs
 
 
-def build_modular_llama_model(model_args: TransformerModelArgs) -> TransformerDecoder:
+def qwen3(model_args: Qwen3ModelArgs) -> nn.Module:
     """
-    Builder function to create a modular Llama model from TransformerModelArgs.
-
-    This function creates the individual components (embeddings, layers, norm, output)
-    and then composes them into a ModularTransformer, following torchtune's pattern
-    while maintaining torchtitan compatibility.
-
-    Args:
-        model_args (TransformerModelArgs): Model configuration arguments
-
-    Returns:
-        ModularTransformer: The modular transformer model
+    Builder for Qwen3 model using modular components.
     """
-    # Create token embeddings
-    tok_embeddings = nn.Embedding(model_args.vocab_size, model_args.dim)
+    args = Qwen3ModelArgs()
 
-    # Create individual components for a transformer layer (torchtune style)
+    # Token embeddings
+    tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
+
+    # RoPE
+    rope = Qwen2RotaryPositionalEmbeddings(
+        dim=args.dim // args.n_heads,
+        max_seq_len=args.max_seq_len,
+        base=args.rope_base,
+    )
 
     # Create modular attention component
     attention = MultiHeadAttention(
@@ -76,6 +74,7 @@ def build_modular_llama_model(model_args: TransformerModelArgs) -> TransformerDe
             model_args.dim,
             bias=False,
         ),
+        pos_embeddings=rope,
         max_seq_len=model_args.max_seq_len,
         is_causal=True,
         attn_dropout=0.0,
@@ -118,6 +117,8 @@ def build_modular_llama_model(model_args: TransformerModelArgs) -> TransformerDe
 
     # Set up attention function for torchtitan compatibility
     try:
+        from torchtitan.models.attention import build_attention
+
         attention.sdpa = build_attention(
             model_args.use_flex_attn, model_args.attn_mask_type
         )
@@ -144,15 +145,80 @@ def build_modular_llama_model(model_args: TransformerModelArgs) -> TransformerDe
     return model
 
 
-# Backward compatibility alias
-def create_modular_llama_model(model_args: TransformerModelArgs) -> TransformerDecoder:
+def qwen3_32b() -> nn.Module:
     """
-    Factory function to create a modular Llama model.
-
-    Args:
-        model_args (TransformerModelArgs): Model configuration arguments
-
-    Returns:
-        TransformerDecoder: The modular transformer model
+    Builder for Qwen3 32B model using modular components.
     """
-    return build_modular_llama_model(model_args)
+    args = Qwen3ModelArgs()
+
+    # Token embeddings
+    tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
+
+    # RoPE
+    rope = Qwen2RotaryPositionalEmbeddings(
+        dim=args.dim // args.n_heads,
+        max_seq_len=args.max_seq_len,
+        base=args.rope_base,
+    )
+
+    # Build layers
+    layers = nn.ModuleList()
+    for _ in range(args.n_layers):
+        # Self-attention
+        self_attn = Qwen3Attention(
+            embed_dim=args.dim,
+            num_heads=args.n_heads,
+            num_kv_heads=args.n_kv_heads,
+            head_dim=args.dim // args.n_heads,
+            q_proj=nn.Linear(
+                args.dim, args.n_heads * (args.dim // args.n_heads), bias=True
+            ),
+            k_proj=nn.Linear(
+                args.dim, args.n_kv_heads * (args.dim // args.n_heads), bias=True
+            ),
+            v_proj=nn.Linear(
+                args.dim, args.n_kv_heads * (args.dim // args.n_heads), bias=True
+            ),
+            output_proj=nn.Linear(args.dim, args.dim, bias=False),
+            pos_embeddings=rope,
+            max_seq_len=args.max_seq_len,
+            attn_dropout=0.0,
+        )
+
+        # Feed forward
+        mlp = FeedForward(
+            dim=args.dim,
+            hidden_dim=args.intermediate_size,
+            linear_class=nn.Linear,
+            activation=nn.SiLU(),
+        )
+
+        # Layer norms
+        sa_norm = nn.RMSNorm(args.dim, eps=args.norm_eps)
+        mlp_norm = nn.RMSNorm(args.dim, eps=args.norm_eps)
+
+        # Create transformer layer
+        from torchtitan.modules.transformer import TransformerSelfAttentionLayer
+
+        layer = TransformerSelfAttentionLayer(
+            attn=self_attn,
+            mlp=mlp,
+            sa_norm=sa_norm,
+            mlp_norm=mlp_norm,
+        )
+        layers.append(layer)
+
+    # Final norm and output projection
+    norm = nn.RMSNorm(args.dim, eps=args.norm_eps)
+    output = nn.Linear(args.dim, args.vocab_size, bias=False)
+
+    # Build the full model
+    model = TransformerDecoder(
+        tok_embeddings=tok_embeddings,
+        layers=layers,
+        norm=norm,
+        output=output,
+        max_seq_len=args.max_seq_len,
+    )
+
+    return model
