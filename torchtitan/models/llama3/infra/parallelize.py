@@ -384,7 +384,9 @@ def apply_fsdp(
     fsdp_config = {"mesh": dp_mesh, "mp_policy": mp_policy}
     if cpu_offload:
         fsdp_config["offload_policy"] = CPUOffloadPolicy()
-
+    
+    reshard_after_forward_policy = "always"
+    print(f"henlo {reshard_after_forward_policy}")
     match reshard_after_forward_policy:
         case "always":
             reshard_after_forward = True

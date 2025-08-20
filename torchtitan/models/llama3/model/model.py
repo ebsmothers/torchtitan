@@ -395,6 +395,7 @@ class Transformer(nn.Module, ModelProtocol):
     def forward(
         self,
         tokens: torch.Tensor,
+        batch_idx: int,
         eos_id: int | None = None,
         input_batch: torch.Tensor | None = None,
     ):
@@ -419,13 +420,19 @@ class Transformer(nn.Module, ModelProtocol):
             init_attention_mask(
                 input_batch if input_batch is not None else tokens, eos_id=eos_id
             )
-
+        # if batch_idx == 142:
+        #     torch.distributed.breakpoint()
         # passthrough for nonexistent layers, allows easy configuration of pipeline parallel stages
-        h = self.tok_embeddings(tokens) if self.tok_embeddings else tokens
+        if batch_idx >= 141:
+            torch.distributed.breakpoint()
 
+        hidden = self.tok_embeddings(tokens) if self.tok_embeddings else tokens
         for layer in self.layers.values():
-            h = layer(h, self.freqs_cis)
-
-        h = self.norm(h) if self.norm else h
-        output = self.output(h) if self.output else h
+            hidden = layer(hidden, self.freqs_cis)
+        # if batch_idx == 142:
+        #     torch.distributed.breakpoint()
+        hidden = self.norm(hidden) if self.norm else hidden
+        output = self.output(hidden) if self.output else hidden
+        # if batch_idx == 142:
+        #     torch.distributed.breakpoint()
         return output
